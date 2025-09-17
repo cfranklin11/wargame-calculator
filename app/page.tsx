@@ -1,11 +1,18 @@
 import { Link } from "@heroui/link";
-import { Snippet } from "@heroui/snippet";
-import { Code } from "@heroui/code";
-import { button as buttonStyles } from "@heroui/theme";
-
-import { siteConfig } from "@/config/site";
-import { title, subtitle } from "@/components/primitives";
 
 export default function Home() {
-  return <div>Hello world</div>;
+  return (
+    <div>
+      <h1>Wargame Calculator</h1>
+      <em>(but just Warhammer 40k for now)</em>
+      <p>Choose a calculator below:</p>
+      <ul>
+        <li>
+          <Link href="/weapon-comparer">Weapon Comparer</Link>
+          <br></br>
+          Compares two weapon profiles across multiple defender profiles.
+        </li>
+      </ul>
+    </div>
+  );
 }
