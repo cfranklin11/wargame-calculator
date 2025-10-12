@@ -17,7 +17,6 @@ import {
   pick,
   groupBy,
   map,
-  replace,
   mergeAll,
   filter,
   prop,
@@ -26,8 +25,18 @@ import {
   KeyValuePair,
   tap,
   invoker,
+  cond,
+  gte,
+  always,
+  lte,
+  gt,
+  equals,
+  lt,
 } from "ramda";
 import camelCase from "lodash/fp/camelCase";
+import { PlotParams } from "react-plotly.js";
+import { PlotType } from "plotly.js";
+import { floor } from "lodash/fp";
 
 interface StatCoordinates {
   toughnessCoordinates: number[];
@@ -35,9 +44,15 @@ interface StatCoordinates {
   woundsCoordinates: number[];
 }
 interface WeaponStats {
-  [x: string]: string;
+  attacks: number;
+  skill: number;
+  strength: number;
+  armorPenetration: number;
+  damage: number;
   weapon: string;
 }
+type WeaponAttribute = Partial<WeaponStats> & { weapon: string };
+
 interface DefensiveStats {
   toughness: number;
   save: number;
@@ -99,27 +114,78 @@ const zipCoordinateTriplets = zipWith<
   statCoordinates.woundsCoordinates
 );
 
-const cleanFormData = ([name, value]: [string, string]) => {
+const cleanFormData = ([name, value]: [string, string]): WeaponAttribute => {
   const attributeParts = name.split("-");
   const weapon = attributeParts[attributeParts.length - 1];
   const attribute = camelCase(attributeParts.slice(0, -1).join("-"));
   return {
     weapon,
-    [attribute]: value,
+    [attribute]: parseFloat(value),
   };
 };
-const preparePlotData = (weaponStats: WeaponStats[]): Plotly.Data =>
+const diceFaceCount = 6;
+const calculateHits = (skill: number, attacks: number) =>
+  ((diceFaceCount - skill + 1) / diceFaceCount) * attacks;
+const calculateWounds = (toughness: number, strength: number, hits: number) =>
   pipe(
-    mergeAll<WeaponStats>,
+    cond([
+      [() => gte(toughness, strength * 2), always(6)],
+      [() => lte(toughness, strength / 2), always(2)],
+      [() => gt(toughness, strength), always(5)],
+      [() => lt(toughness, strength), always(3)],
+      [() => equals(toughness, strength), always(4)],
+    ]),
+    (rollToWound) => ((diceFaceCount - rollToWound + 1) / diceFaceCount) * hits
+  )();
+const calculateUnsavedWounds = (
+  save: number,
+  armorPenetration: number,
+  woundsInflicted: number
+) =>
+  ((diceFaceCount - (diceFaceCount - save - armorPenetration + 1)) /
+    diceFaceCount) *
+  woundsInflicted;
+const calculateKills = (
+  wounds: number,
+  damage: number,
+  woundsInflicted: number
+) => {
+  const wholeWoundsInflicted = floor(woundsInflicted);
+  const { kills } = reduce(
+    ({ kills, damageTotal }) => {
+      const newDamageTotal = damageTotal + damage;
+      if (newDamageTotal >= wounds) return { kills: kills + 1, damageTotal: 0 };
+
+      return { kills, damageTotal: newDamageTotal };
+    },
+    { kills: 0, damageTotal: 0 },
+    range(1, wholeWoundsInflicted + 1)
+  );
+  const wholeDamage = floor((woundsInflicted - wholeWoundsInflicted) * damage)
+  return kills + ;
+};
+const preparePlotData = (weaponStats: WeaponAttribute[]): Plotly.Data =>
+  pipe(
+    mergeAll,
     (weaponStats: WeaponStats) => ({
       weaponStats,
       text: map<DefensiveStats, string>(
-        (triplets): string =>
-          `Weapon ${weaponStats.weapon}: ${JSON.stringify(triplets)}`,
+        ({ toughness, save, wounds }): string =>
+          pipe(
+            (attacks) => calculateHits(weaponStats.skill, attacks),
+            (hits) => calculateWounds(toughness, weaponStats.strength, hits),
+            (woundsInflicted) =>
+              calculateUnsavedWounds(
+                save,
+                weaponStats.armorPenetration,
+                woundsInflicted
+              ),
+            (damageInflicted) => calculateKills(wounds, damageInflicted)
+          )(weaponStats.attacks),
         zipCoordinateTriplets
       ),
     }),
-    ({ weaponStats, text }): Plotly.Data => ({
+    ({ weaponStats, text }) => ({
       type: "scatter3d",
       mode: "markers",
       name: `Weapon ${weaponStats.weapon}`,
@@ -128,20 +194,20 @@ const preparePlotData = (weaponStats: WeaponStats[]): Plotly.Data =>
       y: statCoordinates.saveCoordinates,
       z: statCoordinates.woundsCoordinates,
     })
-  )(weaponStats);
+  )(weaponStats) as Plotly.Data;
 const convertFormDataToPlotData = (
   formElement: HTMLFormElement
 ): Plotly.Data[] =>
   pipe(
     (formElement) => new FormData(formElement),
     Array.from,
-    map<[string, string], WeaponStats>(cleanFormData),
-    groupBy<WeaponStats>(prop("weapon")),
-    (group): (WeaponStats[] | undefined)[] => Object.values(group),
-    filter<WeaponStats[] | undefined, WeaponStats[]>(
-      (item): item is WeaponStats[] => Boolean(item)
+    map<[string, string], WeaponAttribute>(cleanFormData),
+    groupBy<WeaponAttribute>(prop("weapon")),
+    (group): (WeaponAttribute[] | undefined)[] => Object.values(group),
+    filter<WeaponAttribute[] | undefined, WeaponAttribute[]>(
+      (item): item is WeaponAttribute[] => Boolean(item)
     ),
-    map<WeaponStats[], Plotly.Data>(preparePlotData)
+    map<WeaponAttribute[], Plotly.Data>(preparePlotData)
   )(formElement);
 
 const Plot = dynamic(() => import("@/components/plot"), {
